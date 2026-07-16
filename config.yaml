@@ -1,0 +1,13 @@
+ollama:
+  model: "deepseek-r1:1.5b"
+  temperature: 0.3
+  top_p: 0.9
+  max_tokens: 2000
+
+chromadb:
+  persist_directory: "./data/vector_db"
+  collection_name: "nail_components"
+
+rag:
+  top_k: 3
+  similarity_threshold: 0.7

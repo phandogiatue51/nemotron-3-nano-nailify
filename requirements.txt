@@ -1,0 +1,8 @@
+chromadb
+fastapi
+pillow
+pyyaml
+python-dotenv
+requests
+sentence-transformers
+uvicorn
