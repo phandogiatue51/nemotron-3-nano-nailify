@@ -32,10 +32,10 @@ class NailRAGEngine:
             config.get("chromadb", {}).get("persist_directory", "./data/vector_db")
         )
 
-        self.components_cache: List[Dict] = []
-        self.shapes_cache: List[Dict] = []
-        self.surfaces_cache: List[Dict] = []
-        self._load_api_data()
+        # Lazy-load caches to reduce startup memory usage
+        self.components_cache: Optional[List[Dict]] = None
+        self.shapes_cache: Optional[List[Dict]] = None
+        self.surfaces_cache: Optional[List[Dict]] = None
 
         print(f"RAG engine initialized with provider: {self.provider}, model: {self.model}")
 
@@ -74,6 +74,10 @@ class NailRAGEngine:
             return self._fallback_with_real_data(customer_data)
 
     def _load_api_data(self) -> None:
+        """Lazy load API data from cache if not already loaded."""
+        if self.components_cache is not None:
+            return  # Already loaded
+
         print("Loading product data from Nailify APIs...")
         try:
             products = fetch_products()
@@ -90,6 +94,24 @@ class NailRAGEngine:
             f"{len(self.shapes_cache)} nail shapes, "
             f"{len(self.surfaces_cache)} nail surfaces"
         )
+
+    def _get_components_cache(self) -> List[Dict]:
+        """Get components cache, lazy loading if needed."""
+        if self.components_cache is None:
+            self._load_api_data()
+        return self.components_cache or []
+
+    def _get_shapes_cache(self) -> List[Dict]:
+        """Get shapes cache, lazy loading if needed."""
+        if self.shapes_cache is None:
+            self._load_api_data()
+        return self.shapes_cache or []
+
+    def _get_surfaces_cache(self) -> List[Dict]:
+        """Get surfaces cache, lazy loading if needed."""
+        if self.surfaces_cache is None:
+            self._load_api_data()
+        return self.surfaces_cache or []
 
     def _build_retriever_query(self, data: Dict) -> str:
         parts = []
@@ -121,11 +143,12 @@ class NailRAGEngine:
         return "\n".join(lines)
 
     def _format_real_components(self) -> str:
-        if not self.components_cache:
+        components_cache = self._get_components_cache()
+        if not components_cache:
             return "No API components are available."
 
         grouped: Dict[str, List[Dict]] = {}
-        for component in self.components_cache:
+        for component in components_cache:
             grouped.setdefault(component.get("componentType", "Other"), []).append(component)
 
         lines = ["API components available:"]
@@ -139,20 +162,22 @@ class NailRAGEngine:
         return "\n".join(lines)
 
     def _format_real_shapes(self) -> str:
-        if not self.shapes_cache:
+        shapes_cache = self._get_shapes_cache()
+        if not shapes_cache:
             return "No API nail shapes are available."
         return "\n".join(
             f"- {shape.get('name')} (id: {shape.get('nailShapeId')})"
-            for shape in self.shapes_cache
+            for shape in shapes_cache
         )
 
     def _format_real_surfaces(self) -> str:
-        if not self.surfaces_cache:
+        surfaces_cache = self._get_surfaces_cache()
+        if not surfaces_cache:
             return "No API nail surfaces are available."
         return "\n".join(
             f"- {surface.get('name')} "
             f"(id: {surface.get('nailSurfaceId')}, price: {surface.get('price', 0)} VND)"
-            for surface in self.surfaces_cache
+            for surface in surfaces_cache
         )
 
     def _call_llm(self, prompt: str) -> Dict:
@@ -220,11 +245,15 @@ class NailRAGEngine:
         return result
 
     def _map_to_real_ids(self, result: Dict) -> Dict:
-        shape = self._find_by_name(self.shapes_cache, result.get("nail_shape"), "nailShapeId")
+        shapes_cache = self._get_shapes_cache()
+        surfaces_cache = self._get_surfaces_cache()
+        components_cache = self._get_components_cache()
+        
+        shape = self._find_by_name(shapes_cache, result.get("nail_shape"), "nailShapeId")
         if shape:
             result["nail_shape_id"] = shape.get("nailShapeId")
 
-        surface = self._find_by_name(self.surfaces_cache, result.get("surface"), "nailSurfaceId")
+        surface = self._find_by_name(surfaces_cache, result.get("surface"), "nailSurfaceId")
         if surface:
             result["surface_id"] = surface.get("nailSurfaceId")
             result["surface_params"] = {
@@ -236,19 +265,23 @@ class NailRAGEngine:
 
         component_ids = []
         for name in result.get("components", []):
-            component = self._find_by_name(self.components_cache, name, "componentId", partial=True)
+            component = self._find_by_name(components_cache, name, "componentId", partial=True)
             if component:
                 component_ids.append(component.get("componentId"))
         result["component_ids"] = component_ids
         return result
 
     def _format_api_response(self, result: Dict) -> Dict:
-        nail_shape = self._find_by_id(self.shapes_cache, result.get("nail_shape_id"), "nailShapeId")
-        nail_surface = self._find_by_id(self.surfaces_cache, result.get("surface_id"), "nailSurfaceId")
+        shapes_cache = self._get_shapes_cache()
+        surfaces_cache = self._get_surfaces_cache()
+        components_cache = self._get_components_cache()
+        
+        nail_shape = self._find_by_id(shapes_cache, result.get("nail_shape_id"), "nailShapeId")
+        nail_surface = self._find_by_id(surfaces_cache, result.get("surface_id"), "nailSurfaceId")
         components = [
             component
             for component_id in result.get("component_ids", [])
-            if (component := self._find_by_id(self.components_cache, component_id, "componentId"))
+            if (component := self._find_by_id(components_cache, component_id, "componentId"))
         ]
 
         component_ids = [component.get("componentId") for component in components]
@@ -283,7 +316,8 @@ class NailRAGEngine:
         preferred_shape_id = customer_data.get("preferredNailShapeId")
 
         if preferred_shape_id is not None:
-            for shape in self.shapes_cache:
+            shapes_cache = self._get_shapes_cache()
+            for shape in shapes_cache:
                 if shape.get("nailShapeId") == preferred_shape_id:
                     result["nail_shape"] = shape.get("name")
                     result["nail_shape_id"] = preferred_shape_id
@@ -293,11 +327,12 @@ class NailRAGEngine:
 
     def _apply_valid_surface(self, result: Dict, customer_data: Dict) -> Dict:
         """Ensure surface is one of the API nail surfaces, never a color/code."""
-        if not self.surfaces_cache:
+        surfaces_cache = self._get_surfaces_cache()
+        if not surfaces_cache:
             return result
 
         surface_name = result.get("surface")
-        if self._find_by_name(self.surfaces_cache, surface_name, "nailSurfaceId"):
+        if self._find_by_name(surfaces_cache, surface_name, "nailSurfaceId"):
             return result
 
         preferred_styles = {
@@ -305,14 +340,14 @@ class NailRAGEngine:
             for style in customer_data.get("preferredStyles", [])
         }
         selected_surface = None
-        for surface in self.surfaces_cache:
+        for surface in surfaces_cache:
             surface_name_lower = str(surface.get("name", "")).lower()
             if surface_name_lower in preferred_styles:
                 selected_surface = surface
                 break
 
         if not selected_surface:
-            selected_surface = self.surfaces_cache[0]
+            selected_surface = surfaces_cache[0]
 
         result["surface"] = selected_surface.get("name")
         result["surface_id"] = selected_surface.get("nailSurfaceId")
@@ -384,7 +419,8 @@ class NailRAGEngine:
         return selected[:target_count]
 
     def _choose_random_surface(self, customer_data: Dict, rng: random.SystemRandom) -> Optional[Dict]:
-        if not self.surfaces_cache:
+        surfaces_cache = self._get_surfaces_cache()
+        if not surfaces_cache:
             return None
 
         styles = {str(style).lower() for style in customer_data.get("preferredStyles", [])}
@@ -392,7 +428,7 @@ class NailRAGEngine:
         occupation = str(customer_data.get("occupation", "")).lower()
 
         weighted_surfaces = []
-        for surface in self.surfaces_cache:
+        for surface in surfaces_cache:
             name = str(surface.get("name", "")).lower()
             weight = 3
 
@@ -415,7 +451,8 @@ class NailRAGEngine:
         return rng.choice(weighted_surfaces)
 
     def _choose_random_components(self, customer_data: Dict, rng: random.SystemRandom) -> List[Dict]:
-        if not self.components_cache:
+        components_cache = self._get_components_cache()
+        if not components_cache:
             return []
 
         styles = {str(style).lower() for style in customer_data.get("preferredStyles", [])}
@@ -433,7 +470,7 @@ class NailRAGEngine:
         if count == 0:
             return []
 
-        components = list(self.components_cache)
+        components = list(components_cache)
         rng.shuffle(components)
         return components[: min(count, len(components))]
 
@@ -491,10 +528,14 @@ class NailRAGEngine:
         return None
 
     def _fallback_with_real_data(self, customer_data: Dict) -> Dict:
+        shapes_cache = self._get_shapes_cache()
+        surfaces_cache = self._get_surfaces_cache()
+        components_cache = self._get_components_cache()
+        
         preferred_shape = self._preferred_shape(customer_data)
-        shape = preferred_shape or (self.shapes_cache[0] if self.shapes_cache else {"name": "Ballerina", "nailShapeId": None})
-        surface = self.surfaces_cache[0] if self.surfaces_cache else {"name": "Glossy", "nailSurfaceId": None}
-        components = self.components_cache[:3]
+        shape = preferred_shape or (shapes_cache[0] if shapes_cache else {"name": "Ballerina", "nailShapeId": None})
+        surface = surfaces_cache[0] if surfaces_cache else {"name": "Glossy", "nailSurfaceId": None}
+        components = components_cache[:3]
 
         result = {
             "nail_shape": shape.get("name"),
@@ -504,7 +545,6 @@ class NailRAGEngine:
             "colors": self._extract_hex_colors(customer_data.get("preferredColors", []))[:3] or ["#FF69B4", "#FFFFFF"],
             "components": [component.get("name") for component in components],
             "component_ids": [component.get("componentId") for component in components],
-           
         }
         return self._format_api_response(result)
 
@@ -512,7 +552,8 @@ class NailRAGEngine:
         preferred_shape_id = customer_data.get("preferredNailShapeId")
 
         if preferred_shape_id is not None:
-            for shape in self.shapes_cache:
+            shapes_cache = self._get_shapes_cache()
+            for shape in shapes_cache:
                 if shape.get("nailShapeId") == preferred_shape_id:
                     return shape
 

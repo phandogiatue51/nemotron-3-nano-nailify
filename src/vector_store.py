@@ -1,6 +1,6 @@
 # src/vector_store.py
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import chromadb
 from chromadb.config import Settings
@@ -11,16 +11,30 @@ from .api_client import fetch_products
 
 class NailVectorStore:
     def __init__(self, persist_directory: str = "./data/vector_db"):
+        # Memory-optimized ChromaDB settings
+        settings = Settings(
+            anonymized_telemetry=False,
+            allow_reset=True,
+        )
         self.client = chromadb.PersistentClient(
             path=persist_directory,
-            settings=Settings(anonymized_telemetry=False),
+            settings=settings,
         )
         self.collection = self.client.get_or_create_collection(
             name="nail_components",
             metadata={"hnsw:space": "cosine"},
         )
-        self.embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+        self.embedding_model: Optional[SentenceTransformer] = None
+        self._model_loaded = False
         self._initialize_data()
+
+    def _get_embedding_model(self) -> SentenceTransformer:
+        """Lazy load embedding model to save memory at startup."""
+        if self.embedding_model is None:
+            # Using much lighter model (~40MB vs ~100MB for MiniLM)
+            self.embedding_model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+            self._model_loaded = True
+        return self.embedding_model
 
     def _initialize_data(self):
         """Create sample data for RAG context when the collection is empty."""
@@ -85,7 +99,8 @@ class NailVectorStore:
         ]
 
         documents = [component["description"] for component in sample_components]
-        embeddings = self.embedding_model.encode(documents).tolist()
+        model = self._get_embedding_model()
+        embeddings = model.encode(documents, show_progress_bar=False).tolist()
         self.collection.add(
             embeddings=embeddings,
             documents=documents,
@@ -100,7 +115,8 @@ class NailVectorStore:
 
     def search(self, query: str, top_k: int = 3) -> List[Dict]:
         """Search for relevant components."""
-        query_embedding = self.embedding_model.encode([query]).tolist()
+        model = self._get_embedding_model()
+        query_embedding = model.encode([query], show_progress_bar=False).tolist()
         results = self.collection.query(
             query_embeddings=query_embedding,
             n_results=top_k,

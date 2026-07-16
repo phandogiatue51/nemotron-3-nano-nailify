@@ -35,10 +35,14 @@ class RecommendationResponse(BaseModel):
 
 
 def _available_products_summary():
+    shapes_cache = engine._get_shapes_cache()
+    surfaces_cache = engine._get_surfaces_cache()
+    components_cache = engine._get_components_cache()
+    
     return {
         "shapes": [
             {"id": shape.get("nailShapeId"), "name": shape.get("name")}
-            for shape in engine.shapes_cache
+            for shape in shapes_cache
         ],
         "surfaces": [
             {
@@ -46,7 +50,7 @@ def _available_products_summary():
                 "name": surface.get("name"),
                 "price": surface.get("price"),
             }
-            for surface in engine.surfaces_cache
+            for surface in surfaces_cache
         ],
         "components": [
             {
@@ -54,7 +58,7 @@ def _available_products_summary():
                 "name": component.get("name"),
                 "type": component.get("componentType"),
             }
-            for component in engine.components_cache
+            for component in components_cache
         ],
     }
 
@@ -84,30 +88,39 @@ async def get_customer_recommendation(customer_id: str):
 
 @app.get("/api/products")
 async def get_products():
+    shapes_cache = engine._get_shapes_cache()
+    surfaces_cache = engine._get_surfaces_cache()
+    components_cache = engine._get_components_cache()
+    
     return {
-        "shapes": engine.shapes_cache,
-        "surfaces": engine.surfaces_cache,
-        "components": engine.components_cache,
+        "shapes": shapes_cache,
+        "surfaces": surfaces_cache,
+        "components": components_cache,
     }
 
 
 @app.post("/api/products/refresh")
 async def refresh_products():
     engine._load_api_data()
+    shapes_cache = engine._get_shapes_cache()
+    surfaces_cache = engine._get_surfaces_cache()
+    components_cache = engine._get_components_cache()
+    
     return {
         "status": "success",
-        "components_count": len(engine.components_cache),
-        "shapes_count": len(engine.shapes_cache),
-        "surfaces_count": len(engine.surfaces_cache),
+        "components_count": len(components_cache),
+        "shapes_count": len(shapes_cache),
+        "surfaces_count": len(surfaces_cache),
     }
 
 
 @app.get("/api/health")
 async def health_check():
+    components_cache = engine._get_components_cache()
     return {
         "status": "healthy",
         "model": config["ollama"]["model"],
-        "components_count": len(engine.components_cache),
+        "components_count": len(components_cache),
         "shapes_count": len(engine.shapes_cache),
         "surfaces_count": len(engine.surfaces_cache),
         "api_cache_ttl_seconds": 600,
