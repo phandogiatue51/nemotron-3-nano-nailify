@@ -11,7 +11,7 @@ from src.rag_engine import NailRAGEngine
 from src.utils import load_config
 
 
-app = FastAPI(title="Nailify RAG API - Real Data")
+app = FastAPI(title="Nailify RAG API")
 
 config = load_config()
 engine = NailRAGEngine(config)
